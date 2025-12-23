@@ -1,0 +1,1366 @@
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1452760483420438613/2vpi9Nl3INH2kOF9J5T2U8a_AS4lvajwFGvRMXWwbYFx_m2rr0umnOyJ6OCinmrSuT57"
+local VERSION = "0.0.2.0"
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
+local LocalPlayer = Players.LocalPlayer
+
+task.spawn(function()
+    pcall(function()
+        local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({
+                embeds = {{
+                    title = "🔴 Maroon Hub - Session Start",
+                    color = 16711680,
+                    fields = {
+                        {name = "User", value = LocalPlayer.Name, inline = true},
+                        {name = "Game", value = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name, inline = true},
+                        {name = "Executor", value = identifyexecutor and identifyexecutor() or "Unknown", inline = true}
+                    }
+                }}
+            })
+        })
+    end)
+end)
+
+settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+for _, v in pairs(workspace:GetDescendants()) do
+    if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+        v.Enabled = false
+    end
+end
+for _, v in pairs(Lighting:GetChildren()) do
+    if v:IsA("BloomEffect") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+        v.Enabled = false
+    end
+end
+
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+
+local Maroon = {
+    Desync = {Enabled = false, Connection = nil, OriginalCFrame = nil},
+    NoClip = {Enabled = false, Parts = {}},
+    VehicleFly = {Enabled = false, Connection = nil, Speed = 150, Vehicle = nil, Controls = {}},
+    BlenderMode = {Enabled = false, Connection = nil, Target = nil, Vehicle = nil, Speed = 50, Objects = {}},
+    GeprekMode = {Enabled = false, Connection = nil, Target = nil, Vehicle = nil, Speed = 100, Height = 20, Phase = "up", Objects = {}},
+    BuldozerMode = {Enabled = false, Connection = nil, Target = nil, Vehicle = nil, Speed = 50, Objects = {}},
+    AbductorMode = {Enabled = false, Connection = nil, Target = nil, Vehicle = nil, Active = false},
+    OrbitShield = {Enabled = false, Connection = nil, Target = nil, Radius = 3, Speed = 20},
+    DeliveryMode = {Enabled = false, Connection = nil, Target = nil, Vehicle = nil, Destination = nil, Phase = "pickup", PickupRadius = 10, Objects = {}},
+    MarkedPosition = nil,
+    FollowAll = {Enabled = false, Connection = nil, CurrentIndex = 1, Players = {}, OffsetX = 0, OffsetY = 5, OffsetZ = 8, Delay = 3, Timer = 0, LastUpdate = 0},
+    Follow = {Enabled = false, Target = nil, Connection = nil, OffsetX = 0, OffsetY = 3, OffsetZ = 5},
+    Cache = {Characters = {}, Vehicles = {}, LastScan = 0, ScanInterval = 3}
+}
+
+local function GetChar(p)
+    p = p or LocalPlayer
+    if Maroon.Cache.Characters[p.UserId] then
+        local c = Maroon.Cache.Characters[p.UserId]
+        if c and c.Parent then return c end
+    end
+    local c = p.Character
+    if c then Maroon.Cache.Characters[p.UserId] = c end
+    return c
+end
+
+local function GetRoot(p)
+    local c = GetChar(p)
+    return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso") or c.PrimaryPart)
+end
+
+local function ScanVehicles()
+    local t = tick()
+    if t - Maroon.Cache.LastScan < Maroon.Cache.ScanInterval then return Maroon.Cache.Vehicles end
+    Maroon.Cache.Vehicles = {}
+    Maroon.Cache.LastScan = t
+    for _, m in ipairs(workspace:GetChildren()) do
+        if m:IsA("Model") and m ~= GetChar() then
+            local n = m.Name:lower()
+            if n:find("boat") or n:find("ship") or n:find("vehicle") or m:FindFirstChildOfClass("VehicleSeat") then
+                local pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+                if pp then table.insert(Maroon.Cache.Vehicles, {Model = m, Part = pp}) end
+            end
+        end
+    end
+    return Maroon.Cache.Vehicles
+end
+
+local function FindVehicle(pos)
+    local v = ScanVehicles()
+    local n, nd = nil, 150
+    for _, i in ipairs(v) do
+        local d = (i.Part.Position - pos).Magnitude
+        if d < nd then n, nd = i, d end
+    end
+    return n and n.Model, n and n.Part
+end
+
+local function IsInVehicle(p)
+    local c = GetChar(p)
+    if not c then return false, nil end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    return h and h.SeatPart, h and h.SeatPart
+end
+
+local function SetNetworkOwnership(model)
+    for _, part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                part:SetNetworkOwner(LocalPlayer)
+            end)
+        end
+    end
+end
+
+local function EnableDesync()
+    if Maroon.Desync.Enabled then return end
+    local r = GetRoot()
+    if not r then return end
+    Maroon.Desync.OriginalCFrame = r.CFrame
+    Maroon.Desync.Enabled = true
+    local dp = CFrame.new(9e9, 9e9, 9e9)
+    Maroon.Desync.Connection = RunService.Heartbeat:Connect(function()
+        local cr = GetRoot()
+        if cr then cr.CFrame = dp end
+    end)
+    task.wait(0.1)
+    if r then r.CFrame = Maroon.Desync.OriginalCFrame end
+    task.delay(1.5, function()
+        if Maroon.Desync.Enabled then
+            game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end
+    end)
+end
+
+local function DisableDesync()
+    if not Maroon.Desync.Enabled then return end
+    if Maroon.Desync.Connection then Maroon.Desync.Connection:Disconnect() end
+    Maroon.Desync.Enabled = false
+end
+
+local function EnableNoClip()
+    if Maroon.NoClip.Enabled then return end
+    Maroon.NoClip.Enabled = true
+    local c = GetChar()
+    if c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+                table.insert(Maroon.NoClip.Parts, p)
+            end
+        end
+    end
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        if Maroon.NoClip.Enabled then
+            task.wait(0.5)
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide = false
+                end
+            end
+        end
+    end)
+end
+
+local function DisableNoClip()
+    if not Maroon.NoClip.Enabled then return end
+    Maroon.NoClip.Enabled = false
+    for _, p in ipairs(Maroon.NoClip.Parts) do
+        if p and p.Parent then
+            p.CanCollide = true
+        end
+    end
+    Maroon.NoClip.Parts = {}
+end
+
+local function CreateBodyMovers(p)
+    local lv = Instance.new("LinearVelocity")
+    lv.MaxForce = 9e9
+    lv.VectorVelocity = Vector3.zero
+    lv.RelativeTo = Enum.ActuatorRelativeTo.World
+    local a = Instance.new("Attachment")
+    a.Parent = p
+    lv.Attachment0 = a
+    lv.Parent = p
+    
+    local ao = Instance.new("AlignOrientation")
+    ao.MaxTorque = 9e9
+    ao.Responsiveness = 200
+    ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    local a2 = Instance.new("Attachment")
+    a2.Parent = p
+    ao.Attachment0 = a2
+    ao.Parent = p
+    
+    return lv, ao, a, a2
+end
+
+local function CleanupObjects(objectsTable)
+    for _, o in ipairs(objectsTable) do
+        if o and o.Parent then
+            pcall(function() o:Destroy() end)
+        end
+    end
+    table.clear(objectsTable)
+end
+
+local function EnableVehicleFly()
+    if Maroon.VehicleFly.Enabled then return end
+    local iv, s = IsInVehicle(LocalPlayer)
+    local v, vp
+    if iv and s then
+        v = s.Parent
+        vp = v.PrimaryPart or v:FindFirstChildWhichIsA("BasePart")
+    else
+        local r = GetRoot()
+        if r then v, vp = FindVehicle(r.Position) end
+    end
+    if not v or not vp then return end
+    Maroon.VehicleFly.Vehicle = vp
+    Maroon.VehicleFly.Enabled = true
+    for _, p in ipairs(v:GetDescendants()) do
+        if p:IsA("BasePart") then p.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0) end
+    end
+    local lv, ao = CreateBodyMovers(vp)
+    Maroon.VehicleFly.Controls = {W=false,A=false,S=false,D=false,Space=false,Shift=false}
+    local function ui(i, p)
+        local k = i.KeyCode
+        if k == Enum.KeyCode.W then Maroon.VehicleFly.Controls.W = p
+        elseif k == Enum.KeyCode.S then Maroon.VehicleFly.Controls.S = p
+        elseif k == Enum.KeyCode.A then Maroon.VehicleFly.Controls.A = p
+        elseif k == Enum.KeyCode.D then Maroon.VehicleFly.Controls.D = p
+        elseif k == Enum.KeyCode.Space then Maroon.VehicleFly.Controls.Space = p
+        elseif k == Enum.KeyCode.LeftShift or k == Enum.KeyCode.LeftControl then Maroon.VehicleFly.Controls.Shift = p end
+    end
+    UserInputService.InputBegan:Connect(function(i) ui(i, true) end)
+    UserInputService.InputEnded:Connect(function(i) ui(i, false) end)
+    Maroon.VehicleFly.Connection = RunService.Heartbeat:Connect(function()
+        if not vp or not vp.Parent then DisableVehicleFly() return end
+        local cam = workspace.CurrentCamera
+        local md = Vector3.zero
+        local c = Maroon.VehicleFly.Controls
+        if c.W then md = md + cam.CFrame.LookVector end
+        if c.S then md = md - cam.CFrame.LookVector end
+        if c.A then md = md - cam.CFrame.RightVector end
+        if c.D then md = md + cam.CFrame.RightVector end
+        if c.Space then md = md + Vector3.new(0, 1, 0) end
+        if c.Shift then md = md - Vector3.new(0, 1, 0) end
+        if md.Magnitude > 0 then
+            md = md.Unit
+            lv.VectorVelocity = md * Maroon.VehicleFly.Speed
+            ao.CFrame = CFrame.new(vp.Position, vp.Position + md)
+        else
+            lv.VectorVelocity = Vector3.zero
+        end
+    end)
+end
+
+local function DisableVehicleFly()
+    if not Maroon.VehicleFly.Enabled then return end
+    Maroon.VehicleFly.Enabled = false
+    if Maroon.VehicleFly.Connection then Maroon.VehicleFly.Connection:Disconnect() end
+    if Maroon.VehicleFly.Vehicle then
+        for _, o in ipairs(Maroon.VehicleFly.Vehicle:GetChildren()) do
+            if o:IsA("LinearVelocity") or o:IsA("AlignOrientation") or o:IsA("Attachment") then
+                pcall(function() o:Destroy() end)
+            end
+        end
+    end
+end
+
+local function EnableBlenderMode(target)
+    if Maroon.BlenderMode.Enabled then
+        DisableBlenderMode()
+        return
+    end
+    
+    local r = GetRoot()
+    if not r then return end
+    local v, vp = FindVehicle(r.Position)
+    if not v or not vp then return end
+    
+    Maroon.BlenderMode.Enabled = true
+    Maroon.BlenderMode.Target = target
+    Maroon.BlenderMode.Vehicle = vp
+    
+    SetNetworkOwnership(v)
+    
+    for _, p in ipairs(v:GetDescendants()) do
+        if p:IsA("BasePart") then 
+            p.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+            p.CanCollide = true
+        end
+    end
+    
+    Maroon.BlenderMode.Connection = RunService.Heartbeat:Connect(function()
+        if not vp or not vp.Parent then DisableBlenderMode() return end
+        local tr = GetRoot(target)
+        if tr then
+            local targetPos = tr.Position
+            local offset = Vector3.new(0, -2, 0)
+            local overshoot = (targetPos - vp.Position).Unit * 3
+            local desiredVelocity = (targetPos + offset + overshoot - vp.Position).Unit * Maroon.BlenderMode.Speed
+            
+            vp.AssemblyLinearVelocity = desiredVelocity
+            vp.AssemblyAngularVelocity = Vector3.new(0, Maroon.BlenderMode.Speed * 2, 0)
+        end
+    end)
+end
+
+local function DisableBlenderMode()
+    if not Maroon.BlenderMode.Enabled then return end
+    Maroon.BlenderMode.Enabled = false
+    if Maroon.BlenderMode.Connection then
+        Maroon.BlenderMode.Connection:Disconnect()
+        Maroon.BlenderMode.Connection = nil
+    end
+    if Maroon.BlenderMode.Vehicle then
+        Maroon.BlenderMode.Vehicle.AssemblyLinearVelocity = Vector3.zero
+        Maroon.BlenderMode.Vehicle.AssemblyAngularVelocity = Vector3.zero
+    end
+    CleanupObjects(Maroon.BlenderMode.Objects)
+    Maroon.BlenderMode.Target = nil
+    Maroon.BlenderMode.Vehicle = nil
+end
+
+local function EnableGeprekMode(target)
+    if Maroon.GeprekMode.Enabled then
+        DisableGeprekMode()
+        return
+    end
+    
+    local r = GetRoot()
+    if not r then return end
+    local v, vp = FindVehicle(r.Position)
+    if not v or not vp then return end
+    
+    Maroon.GeprekMode.Enabled = true
+    Maroon.GeprekMode.Target = target
+    Maroon.GeprekMode.Vehicle = vp
+    Maroon.GeprekMode.Phase = "up"
+    
+    SetNetworkOwnership(v)
+    
+    for _, p in ipairs(v:GetDescendants()) do
+        if p:IsA("BasePart") then 
+            p.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+            p.CanCollide = true
+        end
+    end
+    
+    Maroon.GeprekMode.Connection = RunService.Heartbeat:Connect(function()
+        if not vp or not vp.Parent then DisableGeprekMode() return end
+        local tr = GetRoot(target)
+        if tr then
+            local targetPos = tr.Position
+            
+            if Maroon.GeprekMode.Phase == "up" then
+                local upPos = targetPos + Vector3.new(0, Maroon.GeprekMode.Height, 0)
+                local velocity = (upPos - vp.Position).Unit * Maroon.GeprekMode.Speed
+                vp.AssemblyLinearVelocity = velocity
+                vp.AssemblyAngularVelocity = Vector3.zero
+                
+                if (vp.Position.Y - targetPos.Y) >= (Maroon.GeprekMode.Height - 5) then
+                    Maroon.GeprekMode.Phase = "down"
+                    task.wait(0.1)
+                end
+            else
+                local downPos = targetPos - Vector3.new(0, 10, 0)
+                local hammerVelocity = (downPos - vp.Position).Unit * (Maroon.GeprekMode.Speed * 2.5)
+                vp.AssemblyLinearVelocity = hammerVelocity
+                vp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                
+                if (vp.Position - targetPos).Magnitude < 8 then
+                    Maroon.GeprekMode.Phase = "up"
+                    task.wait(0.3)
+                end
+            end
+        end
+    end)
+end
+
+local function DisableGeprekMode()
+    if not Maroon.GeprekMode.Enabled then return end
+    Maroon.GeprekMode.Enabled = false
+    if Maroon.GeprekMode.Connection then
+        Maroon.GeprekMode.Connection:Disconnect()
+        Maroon.GeprekMode.Connection = nil
+    end
+    if Maroon.GeprekMode.Vehicle then
+        Maroon.GeprekMode.Vehicle.AssemblyLinearVelocity = Vector3.zero
+        Maroon.GeprekMode.Vehicle.AssemblyAngularVelocity = Vector3.zero
+    end
+    CleanupObjects(Maroon.GeprekMode.Objects)
+    Maroon.GeprekMode.Target = nil
+    Maroon.GeprekMode.Vehicle = nil
+end
+
+local function EnableBuldozerMode(target)
+    if Maroon.BuldozerMode.Enabled then
+        DisableBuldozerMode()
+        return
+    end
+    
+    local r = GetRoot()
+    if not r then return end
+    local v, vp = FindVehicle(r.Position)
+    if not v or not vp then return end
+    
+    Maroon.BuldozerMode.Enabled = true
+    Maroon.BuldozerMode.Target = target
+    Maroon.BuldozerMode.Vehicle = vp
+    
+    SetNetworkOwnership(v)
+    
+    for _, p in ipairs(v:GetDescendants()) do
+        if p:IsA("BasePart") then 
+            p.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+            p.CanCollide = true
+        end
+    end
+    
+    Maroon.BuldozerMode.Connection = RunService.Heartbeat:Connect(function()
+        if not vp or not vp.Parent then DisableBuldozerMode() return end
+        local tr = GetRoot(target)
+        if tr then
+            local direction = (tr.Position - vp.Position).Unit
+            local overshoot = direction * 8
+            local targetVelocity = direction * Maroon.BuldozerMode.Speed
+            
+            vp.AssemblyLinearVelocity = targetVelocity
+            vp.CFrame = CFrame.new(vp.Position, tr.Position + overshoot)
+        end
+    end)
+end
+
+local function DisableBuldozerMode()
+    if not Maroon.BuldozerMode.Enabled then return end
+    Maroon.BuldozerMode.Enabled = false
+    if Maroon.BuldozerMode.Connection then
+        Maroon.BuldozerMode.Connection:Disconnect()
+        Maroon.BuldozerMode.Connection = nil
+    end
+    if Maroon.BuldozerMode.Vehicle then
+        Maroon.BuldozerMode.Vehicle.AssemblyLinearVelocity = Vector3.zero
+    end
+    CleanupObjects(Maroon.BuldozerMode.Objects)
+    Maroon.BuldozerMode.Target = nil
+    Maroon.BuldozerMode.Vehicle = nil
+end
+
+local function EnableDeliveryMode(target)
+    if Maroon.DeliveryMode.Enabled then
+        DisableDeliveryMode()
+        return
+    end
+    
+    if not Maroon.MarkedPosition then
+        WindUI:Notify({
+            Title = "Delivery Failed",
+            Content = "Mark a destination first!",
+            Icon = "alert-triangle",
+        })
+        return
+    end
+    
+    local r = GetRoot()
+    if not r then return end
+    local v, vp = FindVehicle(r.Position)
+    if not v or not vp then return end
+    
+    Maroon.DeliveryMode.Enabled = true
+    Maroon.DeliveryMode.Target = target
+    Maroon.DeliveryMode.Vehicle = vp
+    Maroon.DeliveryMode.Destination = Maroon.MarkedPosition
+    Maroon.DeliveryMode.Phase = "pickup"
+    
+    SetNetworkOwnership(v)
+    
+    for _, p in ipairs(v:GetDescendants()) do
+        if p:IsA("BasePart") then 
+            p.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+            p.CanCollide = true
+        end
+    end
+    
+    Maroon.DeliveryMode.Connection = RunService.Heartbeat:Connect(function()
+        if not vp or not vp.Parent then DisableDeliveryMode() return end
+        local tr = GetRoot(target)
+        
+        if Maroon.DeliveryMode.Phase == "pickup" and tr then
+            local velocity = (tr.Position - vp.Position).Unit * 60
+            vp.AssemblyLinearVelocity = velocity
+            vp.AssemblyAngularVelocity = Vector3.new(0, 50, 0)
+            
+            if (vp.Position - tr.Position).Magnitude < Maroon.DeliveryMode.PickupRadius then
+                Maroon.DeliveryMode.Phase = "delivery"
+                WindUI:Notify({
+                    Title = "Target Captured",
+                    Content = "Delivering to marked location...",
+                    Icon = "check",
+                })
+            end
+        elseif Maroon.DeliveryMode.Phase == "delivery" then
+            local velocity = (Maroon.DeliveryMode.Destination - vp.Position).Unit * 70
+            vp.AssemblyLinearVelocity = velocity
+            vp.AssemblyAngularVelocity = Vector3.new(0, 50, 0)
+            
+            if (vp.Position - Maroon.DeliveryMode.Destination).Magnitude < 15 then
+                WindUI:Notify({
+                    Title = "Delivery Complete",
+                    Content = "Target has been delivered!",
+                    Icon = "package",
+                })
+                DisableDeliveryMode()
+            end
+        end
+    end)
+end
+
+local function DisableDeliveryMode()
+    if not Maroon.DeliveryMode.Enabled then return end
+    Maroon.DeliveryMode.Enabled = false
+    if Maroon.DeliveryMode.Connection then
+        Maroon.DeliveryMode.Connection:Disconnect()
+        Maroon.DeliveryMode.Connection = nil
+    end
+    if Maroon.DeliveryMode.Vehicle then
+        Maroon.DeliveryMode.Vehicle.AssemblyLinearVelocity = Vector3.zero
+        Maroon.DeliveryMode.Vehicle.AssemblyAngularVelocity = Vector3.zero
+    end
+    CleanupObjects(Maroon.DeliveryMode.Objects)
+    Maroon.DeliveryMode.Target = nil
+    Maroon.DeliveryMode.Vehicle = nil
+    Maroon.DeliveryMode.Phase = "pickup"
+end
+
+local function EnableAbductorMode(target)
+    if Maroon.AbductorMode.Enabled then
+        if Maroon.AbductorMode.Connection then Maroon.AbductorMode.Connection:Disconnect() end
+        Maroon.AbductorMode.Enabled = false
+        Maroon.AbductorMode.Active = false
+        return
+    end
+    
+    Maroon.AbductorMode.Enabled = true
+    Maroon.AbductorMode.Target = target
+    Maroon.AbductorMode.Active = false
+    
+    Maroon.AbductorMode.Connection = RunService.Heartbeat:Connect(function()
+        local tr = GetRoot(target)
+        local mr = GetRoot()
+        if tr and mr then
+            if not Maroon.AbductorMode.Active then
+                mr.CFrame = CFrame.new(tr.Position + Vector3.new(0, 0, 0))
+                if (tr.Position - mr.Position).Magnitude < 5 then
+                    Maroon.AbductorMode.Active = true
+                end
+            else
+                mr.CFrame = mr.CFrame + Vector3.new(0, 2, 0)
+            end
+        end
+    end)
+end
+
+local function EnableOrbitShield(target)
+    if Maroon.OrbitShield.Enabled then
+        if Maroon.OrbitShield.Connection then Maroon.OrbitShield.Connection:Disconnect() end
+        Maroon.OrbitShield.Enabled = false
+        return
+    end
+    
+    Maroon.OrbitShield.Enabled = true
+    Maroon.OrbitShield.Target = target
+    
+    Maroon.OrbitShield.Connection = RunService.Heartbeat:Connect(function()
+        local tr = GetRoot(target)
+        local mr = GetRoot()
+        if tr and mr then
+            local angle = (tick() * Maroon.OrbitShield.Speed) % (math.pi * 2)
+            local offset = Vector3.new(
+                math.cos(angle) * Maroon.OrbitShield.Radius,
+                2,
+                math.sin(angle) * Maroon.OrbitShield.Radius
+            )
+            mr.CFrame = CFrame.new(tr.Position + offset)
+        end
+    end)
+end
+
+local function TeleportTo(pos, off)
+    local r = GetRoot()
+    if not r then return false end
+    local fp = off and (pos + off) or pos
+    local iv, s = IsInVehicle(LocalPlayer)
+    if iv and s and s.Parent then
+        local vp = s.Parent.PrimaryPart or s.Parent:FindFirstChildWhichIsA("BasePart")
+        if vp then vp.CFrame = CFrame.new(fp) return true end
+    end
+    if Maroon.Desync.Enabled then Maroon.Desync.OriginalCFrame = CFrame.new(fp) end
+    r.CFrame = CFrame.new(fp)
+    return true
+end
+
+local function EnableFollowAll()
+    if Maroon.FollowAll.Enabled then return end
+    Maroon.FollowAll.Enabled = true
+    Maroon.FollowAll.Connection = RunService.Heartbeat:Connect(function(dt)
+        if not Maroon.FollowAll.Enabled then return end
+        local t = tick()
+        if t - (Maroon.FollowAll.LastUpdate or 0) > 3 then
+            Maroon.FollowAll.Players = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character then table.insert(Maroon.FollowAll.Players, p) end
+            end
+            Maroon.FollowAll.LastUpdate = t
+        end
+        if #Maroon.FollowAll.Players == 0 then return end
+        Maroon.FollowAll.Timer = Maroon.FollowAll.Timer + dt
+        if Maroon.FollowAll.Timer >= Maroon.FollowAll.Delay then
+            Maroon.FollowAll.Timer = 0
+            Maroon.FollowAll.CurrentIndex = Maroon.FollowAll.CurrentIndex + 1
+            if Maroon.FollowAll.CurrentIndex > #Maroon.FollowAll.Players then Maroon.FollowAll.CurrentIndex = 1 end
+        end
+        local tgt = Maroon.FollowAll.Players[Maroon.FollowAll.CurrentIndex]
+        if tgt then
+            local tr = GetRoot(tgt)
+            if tr then
+                local off = Vector3.new(Maroon.FollowAll.OffsetX, Maroon.FollowAll.OffsetY, Maroon.FollowAll.OffsetZ)
+                TeleportTo(tr.Position, off)
+            end
+        end
+    end)
+end
+
+local function DisableFollowAll()
+    if not Maroon.FollowAll.Enabled then return end
+    Maroon.FollowAll.Enabled = false
+    if Maroon.FollowAll.Connection then Maroon.FollowAll.Connection:Disconnect() end
+end
+
+local function EnableFollow(p)
+    if Maroon.Follow.Enabled and Maroon.Follow.Target == p then
+        if Maroon.Follow.Connection then Maroon.Follow.Connection:Disconnect() end
+        Maroon.Follow.Enabled = false
+        Maroon.Follow.Target = nil
+        return false
+    end
+    if Maroon.Follow.Connection then Maroon.Follow.Connection:Disconnect() end
+    Maroon.Follow.Enabled = true
+    Maroon.Follow.Target = p
+    Maroon.Follow.Connection = RunService.Heartbeat:Connect(function()
+        if not Maroon.Follow.Target then return end
+        local tr = GetRoot(Maroon.Follow.Target)
+        if tr then
+            local off = Vector3.new(Maroon.Follow.OffsetX, Maroon.Follow.OffsetY, Maroon.Follow.OffsetZ)
+            TeleportTo(tr.Position, off)
+        end
+    end)
+    return true
+end
+
+local currentFps = 0
+RunService.Heartbeat:Connect(function(dt)
+    currentFps = math.floor(1 / dt)
+end)
+
+local Window = WindUI:CreateWindow({
+    Title = "Maroon Hub v" .. VERSION,
+    Folder = "MaroonHub",
+    IconSize = 44,
+    HideSearchBar = false,
+    OpenButton = {
+        Title = "Open Maroon Hub",
+        CornerRadius = UDim.new(1, 0),
+        StrokeThickness = 3,
+        Enabled = true,
+        Draggable = true,
+        OnlyMobile = false,
+        Color = ColorSequence.new(
+            Color3.fromHex("#FF0000"),
+            Color3.fromHex("#8B0000")
+        )
+    },
+    Topbar = {
+        Height = 44,
+        ButtonsType = "Mac",
+    }
+})
+
+Window:Tag({
+    Title = "v" .. VERSION,
+    Icon = "skull",
+    Color = Color3.fromHex("#8B0000")
+})
+
+local MainTab = Window:Tab({
+    Title = "Main",
+    Icon = "solar:home-2-bold",
+    IconColor = Color3.fromHex("#FF0000"),
+    IconShape = "Square",
+})
+
+local FollowTab = Window:Tab({
+    Title = "Follow",
+    Icon = "user-check",
+    IconColor = Color3.fromHex("#00FF00"),
+    IconShape = "Square",
+})
+
+local TrollingTab = Window:Tab({
+    Title = "Trolling",
+    Icon = "skull",
+    IconColor = Color3.fromHex("#FF6B00"),
+    IconShape = "Square",
+})
+
+local VehicleTab = Window:Tab({
+    Title = "Vehicle",
+    Icon = "ship",
+    IconColor = Color3.fromHex("#00BFFF"),
+    IconShape = "Square",
+})
+
+MainTab:Section({
+    Title = "Real-time Stats",
+    TextSize = 18,
+})
+
+local StatsSection = MainTab:Section({
+    Title = "Loading...",
+    TextSize = 14,
+    TextTransparency = 0.3,
+})
+
+task.spawn(function()
+    while task.wait(1) do
+        local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+        pcall(function()
+            StatsSection.Title = string.format("FPS: %d | Ping: %d ms | Players: %d/%d", currentFps, ping, #Players:GetPlayers(), Players.MaxPlayers)
+        end)
+    end
+end)
+
+MainTab:Space()
+
+MainTab:Section({
+    Title = "Core Features",
+    TextSize = 16,
+})
+
+MainTab:Toggle({
+    Flag = "Desync",
+    Title = "Network Desync",
+    Desc = "Enable network desynchronization",
+    Default = false,
+    Callback = function(v)
+        if v then EnableDesync() else DisableDesync() end
+    end,
+})
+
+MainTab:Space()
+
+MainTab:Toggle({
+    Flag = "NoClip",
+    Title = "NoClip (Optimized)",
+    Desc = "Walk through walls",
+    Default = false,
+    Callback = function(v)
+        if v then EnableNoClip() else DisableNoClip() end
+    end,
+})
+
+FollowTab:Section({
+    Title = "Player Selection",
+    TextSize = 16,
+})
+
+local SelectedPlayer = nil
+local PlayerDropdownValues = {}
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        table.insert(PlayerDropdownValues, {Title = p.Name, Icon = "user"})
+    end
+end
+
+local PlayerDropdown = FollowTab:Dropdown({
+    Flag = "PlayerSelect",
+    Title = "Select Player",
+    Values = PlayerDropdownValues,
+    Callback = function(option)
+        SelectedPlayer = option.Title
+    end,
+})
+
+FollowTab:Space()
+
+FollowTab:Button({
+    Title = "Refresh Players",
+    Icon = "refresh-cw",
+    Justify = "Center",
+    Callback = function()
+        PlayerDropdownValues = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                table.insert(PlayerDropdownValues, {Title = p.Name, Icon = "user"})
+            end
+        end
+        WindUI:Notify({
+            Title = "Players Refreshed",
+            Content = #PlayerDropdownValues .. " players found",
+            Icon = "check",
+        })
+    end,
+})
+
+FollowTab:Space()
+
+FollowTab:Section({
+    Title = "Follow Settings",
+    TextSize = 16,
+})
+
+FollowTab:Slider({
+    Flag = "FollowX",
+    Title = "Offset X",
+    Step = 1,
+    Value = {
+        Min = -50,
+        Max = 50,
+        Default = 0,
+    },
+    Callback = function(v) Maroon.Follow.OffsetX = v end,
+})
+
+FollowTab:Space()
+
+FollowTab:Slider({
+    Flag = "FollowY",
+    Title = "Offset Y",
+    Step = 1,
+    Value = {
+        Min = -50,
+        Max = 50,
+        Default = 3,
+    },
+    Callback = function(v) Maroon.Follow.OffsetY = v end,
+})
+
+FollowTab:Space()
+
+FollowTab:Slider({
+    Flag = "FollowZ",
+    Title = "Offset Z",
+    Step = 1,
+    Value = {
+        Min = -50,
+        Max = 50,
+        Default = 5,
+    },
+    Callback = function(v) Maroon.Follow.OffsetZ = v end,
+})
+
+FollowTab:Space()
+
+FollowTab:Toggle({
+    Flag = "FollowPlayer",
+    Title = "Follow Selected Player",
+    Desc = "Enable following mode",
+    Default = false,
+    Callback = function(v)
+        if SelectedPlayer then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Name == SelectedPlayer then
+                    if v then
+                        EnableFollow(p)
+                    else
+                        if Maroon.Follow.Connection then Maroon.Follow.Connection:Disconnect() end
+                        Maroon.Follow.Enabled = false
+                    end
+                    break
+                end
+            end
+        end
+    end,
+})
+
+FollowTab:Space()
+
+FollowTab:Section({
+    Title = "Mass Follow",
+    TextSize = 16,
+})
+
+FollowTab:Toggle({
+    Flag = "FollowAll",
+    Title = "Follow All Players",
+    Desc = "Cycle through all players",
+    Default = false,
+    Callback = function(v)
+        if v then EnableFollowAll() else DisableFollowAll() end
+    end,
+})
+
+FollowTab:Space()
+
+FollowTab:Slider({
+    Flag = "FollowAllDelay",
+    Title = "Switch Delay",
+    Step = 1,
+    Value = {
+        Min = 1,
+        Max = 15,
+        Default = 3,
+    },
+    Callback = function(v) Maroon.FollowAll.Delay = v end,
+})
+
+TrollingTab:Section({
+    Title = "Victim Selection",
+    TextSize = 16,
+})
+
+local SelectedVictim = nil
+local VictimDropdownValues = {}
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        table.insert(VictimDropdownValues, {Title = p.Name, Icon = "crosshair"})
+    end
+end
+
+local VictimDropdown = TrollingTab:Dropdown({
+    Flag = "VictimSelect",
+    Title = "Select Victim",
+    Values = VictimDropdownValues,
+    Callback = function(option)
+        SelectedVictim = option.Title
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Button({
+    Title = "Refresh Victims",
+    Icon = "refresh-cw",
+    Justify = "Center",
+    Callback = function()
+        VictimDropdownValues = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                table.insert(VictimDropdownValues, {Title = p.Name, Icon = "crosshair"})
+            end
+        end
+        WindUI:Notify({
+            Title = "Victims Refreshed",
+            Content = #VictimDropdownValues .. " victims found",
+            Icon = "check",
+        })
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "🌀 The Blender Mode",
+    TextSize = 16,
+})
+
+TrollingTab:Slider({
+    Flag = "BlenderSpeed",
+    Title = "Spin Speed",
+    Step = 10,
+    Value = {
+        Min = 10,
+        Max = 200,
+        Default = 50,
+    },
+    Callback = function(v) Maroon.BlenderMode.Speed = v end,
+})
+
+TrollingTab:Space()
+
+local BlenderToggle = TrollingTab:Toggle({
+    Flag = "BlenderMode",
+    Title = "Enable Blender",
+    Desc = "Activate vehicle spinning mode",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableBlenderMode(p)
+                        break
+                    end
+                end
+            end
+        else
+            DisableBlenderMode()
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "🔨 The Geprek Mode",
+    TextSize = 16,
+})
+
+TrollingTab:Slider({
+    Flag = "GeprekHeight",
+    Title = "Smash Height",
+    Step = 5,
+    Value = {
+        Min = 10,
+        Max = 50,
+        Default = 20,
+    },
+    Callback = function(v) Maroon.GeprekMode.Height = v end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Slider({
+    Flag = "GeprekSpeed",
+    Title = "Smash Speed",
+    Step = 10,
+    Value = {
+        Min = 50,
+        Max = 200,
+        Default = 100,
+    },
+    Callback = function(v) Maroon.GeprekMode.Speed = v end,
+})
+
+TrollingTab:Space()
+
+local GeprekToggle = TrollingTab:Toggle({
+    Flag = "GeprekMode",
+    Title = "Enable Geprek",
+    Desc = "Smash down repeatedly on target",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableGeprekMode(p)
+                        break
+                    end
+                end
+            end
+        else
+            DisableGeprekMode()
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "🚜 The Buldozer Mode",
+    TextSize = 16,
+})
+
+TrollingTab:Slider({
+    Flag = "BuldozerSpeed",
+    Title = "Push Speed",
+    Step = 10,
+    Value = {
+        Min = 20,
+        Max = 100,
+        Default = 50,
+    },
+    Callback = function(v) Maroon.BuldozerMode.Speed = v end,
+})
+
+TrollingTab:Space()
+
+local BuldozerToggle = TrollingTab:Toggle({
+    Flag = "BuldozerMode",
+    Title = "Enable Buldozer",
+    Desc = "Push target continuously",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableBuldozerMode(p)
+                        break
+                    end
+                end
+            end
+        else
+            DisableBuldozerMode()
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "📦 The Delivery Mode",
+    TextSize = 16,
+})
+
+TrollingTab:Button({
+    Title = "Mark Current Position",
+    Icon = "map-pin",
+    Justify = "Center",
+    Color = Color3.fromHex("#FFD700"),
+    Callback = function()
+        local r = GetRoot()
+        if r then
+            Maroon.MarkedPosition = r.Position
+            WindUI:Notify({
+                Title = "Position Marked",
+                Content = "Delivery destination set!",
+                Icon = "check",
+            })
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Slider({
+    Flag = "DeliveryPickupRadius",
+    Title = "Pickup Radius",
+    Step = 1,
+    Value = {
+        Min = 5,
+        Max = 20,
+        Default = 10,
+    },
+    Callback = function(v) Maroon.DeliveryMode.PickupRadius = v end,
+})
+
+TrollingTab:Space()
+
+local DeliveryToggle = TrollingTab:Toggle({
+    Flag = "DeliveryMode",
+    Title = "Enable Delivery",
+    Desc = "Capture and deliver target to marked position",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableDeliveryMode(p)
+                        break
+                    end
+                end
+            end
+        else
+            DisableDeliveryMode()
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "🛸 The Abductor",
+    TextSize = 16,
+})
+
+TrollingTab:Toggle({
+    Flag = "AbductorMode",
+    Title = "Enable Abductor",
+    Desc = "Kidnap and lift players",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableAbductorMode(p)
+                        break
+                    end
+                end
+            end
+        end
+    end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Section({
+    Title = "🛡️ Orbit Shield",
+    TextSize = 16,
+})
+
+TrollingTab:Slider({
+    Flag = "OrbitRadius",
+    Title = "Orbit Radius",
+    Step = 1,
+    Value = {
+        Min = 1,
+        Max = 10,
+        Default = 3,
+    },
+    Callback = function(v) Maroon.OrbitShield.Radius = v end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Slider({
+    Flag = "OrbitSpeed",
+    Title = "Orbit Speed",
+    Step = 5,
+    Value = {
+        Min = 10,
+        Max = 50,
+        Default = 20,
+    },
+    Callback = function(v) Maroon.OrbitShield.Speed = v end,
+})
+
+TrollingTab:Space()
+
+TrollingTab:Toggle({
+    Flag = "OrbitShield",
+    Title = "Enable Orbit Shield",
+    Desc = "Circle around target player",
+    Default = false,
+    Callback = function(v)
+        if v then
+            if SelectedVictim then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == SelectedVictim then
+                        EnableOrbitShield(p)
+                        break
+                    end
+                end
+            end
+        end
+    end,
+})
+
+VehicleTab:Section({
+    Title = "Vehicle Control",
+    TextSize = 16,
+})
+
+VehicleTab:Toggle({
+    Flag = "VehicleFly",
+    Title = "Vehicle Fly Mode",
+    Desc = "Enable flying for nearby vehicle",
+    Default = false,
+    Callback = function(v)
+        if v then EnableVehicleFly() else DisableVehicleFly() end
+    end,
+})
+
+VehicleTab:Space()
+
+VehicleTab:Slider({
+    Flag = "FlySpeed",
+    Title = "Fly Speed",
+    Step = 10,
+    Value = {
+        Min = 50,
+        Max = 300,
+        Default = 150,
+    },
+    Callback = function(v) Maroon.VehicleFly.Speed = v end,
+})
+
+VehicleTab:Space()
+
+VehicleTab:Section({
+    Title = "Controls: W/S: Forward/Back | A/D: Left/Right | Space: Up | Shift: Down",
+    TextSize = 12,
+    TextTransparency = 0.4,
+})
+
+VehicleTab:Space()
+
+VehicleTab:Section({
+    Title = "Performance",
+    TextSize = 16,
+})
+
+VehicleTab:Button({
+    Title = "Ultra FPS Boost",
+    Desc = "Maximum graphics optimization",
+    Icon = "zap",
+    Justify = "Center",
+    Color = Color3.fromHex("#FFD700"),
+    Callback = function()
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+                v.Enabled = false
+            end
+        end
+        for _, v in pairs(Lighting:GetChildren()) do
+            if v:IsA("BloomEffect") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                v.Enabled = false
+            end
+        end
+        for _, v in pairs(game:GetDescendants()) do
+            if v:IsA("Decal") or v:IsA("Texture") then
+                v.Transparency = 1
+            end
+        end
+        WindUI:Notify({
+            Title = "Ultra Boost Applied",
+            Content = "FPS optimized to maximum",
+            Icon = "check",
+        })
+    end,
+})
+
+task.spawn(function()
+    while task.wait(3) do
+        PlayerDropdownValues = {}
+        VictimDropdownValues = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                table.insert(PlayerDropdownValues, {Title = p.Name, Icon = "user"})
+                table.insert(VictimDropdownValues, {Title = p.Name, Icon = "crosshair"})
+            end
+        end
+    end
+end)
+
+WindUI:Notify({
+    Title = "Maroon Hub v" .. VERSION,
+    Content = "Ultimate Trolling System Loaded!",
+    Icon = "skull",
+})
+
+LocalPlayer.CharacterAdded:Connect(function()
+    Maroon.Cache.Characters = {}
+    task.wait(1)
+    if Maroon.Desync.Enabled then
+        DisableDesync()
+        task.wait(0.5)
+        EnableDesync()
+    end
+    if Maroon.NoClip.Enabled then
+        local c = GetChar()
+        if c then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide = false
+                end
+            end
+        end
+    end
+end)
